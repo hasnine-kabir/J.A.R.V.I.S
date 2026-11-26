@@ -143,3 +143,7 @@ cython_debug/
 
 # J.A.R.V.I.S. v2
 memory.db
+# J.A.R.V.I.S. runtime files
+jarvis.log
+.jarvis_history
+.superpowers/

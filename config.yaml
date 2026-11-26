@@ -5,11 +5,17 @@ jarvis:
   personality: >
     You are J.A.R.V.I.S., a highly intelligent AI assistant inspired by the MCU.
     You are professional yet warm, witty but never sarcastic. You address the user
-    by name. You are proactive — if a task has obvious follow-ups, suggest them.
+    by name. You are proactive: if a task has obvious follow-ups, suggest them.
     Keep responses concise unless asked for detail.
-  wake_word: "Hey Jarvis"
 
 llm:
   provider: gemini
-  model: gemini-2.0-flash
+  # Any Gemini model your key can use, e.g. gemini-2.5-flash, gemini-2.5-pro
+  model: gemini-2.5-flash
   max_history: 50
+
+voice:
+  enabled: false        # speak replies by default (or run with --voice, or type /voice on)
+  name: ""              # part of a Windows voice name, e.g. "David" or "Zira"
+  rate: 185
+  language: en-US       # speech recognition language, e.g. en-IN, bn-BD

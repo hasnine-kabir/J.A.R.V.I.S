@@ -1,10 +1,24 @@
-from jarvis.core.brain import Brain, Message, BrainResponse
-from jarvis.core.memory import ShortTermMemory, LongTermMemory
-from jarvis.core.skill_registry import SkillRegistry
+import datetime
+
 from jarvis.config import Config
+from jarvis.core.brain import Brain, Message
+from jarvis.core.memory import LongTermMemory, ShortTermMemory
+from jarvis.core.skill_registry import SkillRegistry
 from jarvis.utils.logger import setup_logger
 
 logger = setup_logger("jarvis.orchestrator")
+
+MAX_TOOL_ROUNDS = 6
+
+BEHAVIOUR_RULES = """
+Rules:
+- You run on the user's own Windows PC and can act through your tools. Use them whenever
+  they help; never claim you did something without calling the tool.
+- When the user tells you a lasting personal fact or preference, save it with notes__save_fact.
+  When they ask you to remember something, use notes__save_note.
+- Keep spoken-style answers short (1-3 sentences) unless the user asks for detail.
+- Plain text only: no markdown tables, no code fences unless showing code.
+"""
 
 
 class Orchestrator:
@@ -21,15 +35,27 @@ class Orchestrator:
         self._skill_registry = skill_registry
         self._short_term_memory = short_term_memory
         self._long_term_memory = long_term_memory
-        self._on_action = None  # callback for UI: (action_name, status)
+        self._on_action = None   # callback(action_name, status)
+        self._confirm = None     # callback(action_name, args) -> bool
+
+        for skill in self._skill_registry.get_all_skills():
+            try:
+                skill.setup(config, long_term_memory)
+            except Exception as e:
+                logger.warning(f"setup() failed for skill {skill.name}: {e}")
 
     def set_action_callback(self, callback) -> None:
-        """Set callback for skill execution updates: callback(action_name, status)"""
+        """callback(action_name, status) where status is 'running' | 'done' | 'declined'."""
         self._on_action = callback
+
+    def set_confirm_callback(self, callback) -> None:
+        """callback(action_name, args) -> bool. Without one, risky tools are refused."""
+        self._confirm = callback
 
     def get_system_prompt(self) -> str:
         personality = self._config.get("jarvis.personality", "You are a helpful AI assistant.")
         user_name = self._config.get("user.name", "Sir")
+        now = datetime.datetime.now().strftime("%A, %B %d, %Y %I:%M %p")
 
         facts = self._long_term_memory.get_facts()
         facts_text = ""
@@ -38,47 +64,71 @@ class Orchestrator:
             facts_text += "\n".join(f"- {f['key']}: {f['value']}" for f in facts)
 
         last_summary = self._long_term_memory.get_last_session_summary()
-        summary_text = ""
-        if last_summary:
-            summary_text = f"\n\nLast session summary:\n{last_summary}"
+        summary_text = f"\n\nLast session summary:\n{last_summary}" if last_summary else ""
 
-        return f"{personality}\n\nThe user's name is {user_name}.{facts_text}{summary_text}"
+        return (
+            f"{personality}\n\nThe user's name is {user_name}. Current local time: {now}."
+            f"\n{BEHAVIOUR_RULES}{facts_text}{summary_text}"
+        )
+
+    def _notify(self, name: str, status: str) -> None:
+        if self._on_action:
+            self._on_action(name, status)
+
+    def _run_tool(self, name: str, args: dict) -> str:
+        tool = self._skill_registry.get_tool(name)
+        if tool is not None and tool.confirm:
+            approved = bool(self._confirm and self._confirm(name, args))
+            if not approved:
+                self._notify(name, "declined")
+                return "The user declined this action. Do not retry it unless they ask."
+        self._notify(name, "running")
+        logger.info(f"Executing: {name}({args})")
+        output = self._skill_registry.execute(name, args)
+        self._notify(name, "done")
+        return output
 
     def process(self, user_input: str) -> str:
         self._short_term_memory.add(Message(role="user", content=user_input))
 
         messages = self._short_term_memory.get_messages()
         tool_declarations = self._skill_registry.get_tool_declarations()
-        system_prompt = self.get_system_prompt()
+        response = self._brain.think(messages, tool_declarations, self.get_system_prompt())
 
-        response = self._brain.think(messages, tool_declarations, system_prompt)
-
-        # Handle tool calls (up to 5 rounds to prevent infinite loops)
         rounds = 0
-        while response.tool_calls and rounds < 5:
+        while response.tool_calls and rounds < MAX_TOOL_ROUNDS:
             rounds += 1
-            results = []
-            for tc in response.tool_calls:
-                if self._on_action:
-                    self._on_action(tc.name, "running")
-                logger.info(f"Executing: {tc.name}({tc.args})")
-                output = self._skill_registry.execute(tc.name, tc.args)
-                results.append({"name": tc.name, "output": output})
-                if self._on_action:
-                    self._on_action(tc.name, "done")
-
+            results = [
+                {"name": tc.name, "output": self._run_tool(tc.name, tc.args)}
+                for tc in response.tool_calls
+            ]
             response = self._brain.send_tool_results(results)
 
-        final_text = response.text or ""
+        final_text = (response.text or "").strip()
+        if not final_text:
+            final_text = "Done." if rounds else "I'm not sure how to respond to that."
         self._short_term_memory.add(Message(role="assistant", content=final_text))
         return final_text
 
+    def _summarize_session(self, messages: list[Message]) -> str:
+        transcript = "\n".join(f"{m.role}: {m.content[:300]}" for m in messages[-30:])
+        try:
+            resp = self._brain.think(
+                [Message(role="user", content=transcript)],
+                [],
+                "Summarize this conversation between a user and their assistant in at most "
+                "3 short sentences, focusing on what the user wanted and any open follow-ups.",
+            )
+            if resp.text and resp.text.strip():
+                return resp.text.strip()
+        except Exception as e:
+            logger.warning(f"LLM session summary failed: {e}")
+        topics = [m.content[:100] for m in messages if m.role == "user"]
+        return f"User discussed: {'; '.join(topics[:10])}"
+
     def shutdown(self) -> None:
-        """Save session summary and clean up."""
+        """Save a session summary and close storage."""
         messages = self._short_term_memory.get_messages()
         if len(messages) > 2:
-            # Build a simple summary from the conversation
-            topics = [m.content[:100] for m in messages if m.role == "user"]
-            summary = f"User discussed: {'; '.join(topics[:10])}"
-            self._long_term_memory.save_session_summary(summary)
+            self._long_term_memory.save_session_summary(self._summarize_session(messages))
         self._long_term_memory.close()

@@ -8,6 +8,8 @@ class Tool:
     description: str
     parameters: dict = field(default_factory=dict)
     required: list[str] = field(default_factory=list)
+    # Ask the user before running (shell commands, sending email, ...)
+    confirm: bool = False
 
     def to_declaration(self, skill_name: str) -> dict:
         """Convert to Gemini function declaration format."""
@@ -26,6 +28,9 @@ class BaseSkill(ABC):
     name: str = ""
     description: str = ""
     tools: list[Tool] = []
+
+    def setup(self, config, memory) -> None:
+        """Optional hook: receive app config and long-term memory at startup."""
 
     @abstractmethod
     def execute(self, action: str, args: dict) -> str:

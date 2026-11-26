@@ -1,6 +1,7 @@
+"""LLM brain. Provider-neutral data types + the Gemini implementation."""
 from dataclasses import dataclass, field
 from typing import Protocol
-import google.generativeai as genai
+
 from jarvis.utils.logger import setup_logger
 
 logger = setup_logger("jarvis.brain")
@@ -8,7 +9,7 @@ logger = setup_logger("jarvis.brain")
 
 @dataclass
 class Message:
-    role: str  # "user", "assistant", "tool_result"
+    role: str  # "user" or "assistant"
     content: str
 
 
@@ -36,23 +37,23 @@ class Brain(Protocol):
 
 
 class GeminiBrain:
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
-        genai.configure(api_key=api_key)
-        self._model_name = model
-        self._model = None
-        self._chat = None
+    """Gemini via the `google-genai` SDK.
 
-    def _ensure_chat(self, system_prompt: str, tool_declarations: list[dict]):
-        """Create or recreate the model and chat with current tools."""
-        tools = None
-        if tool_declarations:
-            tools = [{"function_declarations": tool_declarations}]
-        self._model = genai.GenerativeModel(
-            model_name=self._model_name,
-            system_instruction=system_prompt,
-            tools=tools,
-        )
-        self._chat = self._model.start_chat()
+    Stateless between user turns: every `think()` rebuilds the conversation
+    from the messages it is given. Within one turn, `send_tool_results()`
+    continues the same exchange so the model sees its own function calls
+    (including any thought signatures) followed by the results.
+    """
+
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", client=None):
+        if client is None:
+            from google import genai
+
+            client = genai.Client(api_key=api_key)
+        self._client = client
+        self._model = model
+        self._contents: list = []
+        self._config = None
 
     def think(
         self,
@@ -60,58 +61,70 @@ class GeminiBrain:
         tool_declarations: list[dict],
         system_prompt: str,
     ) -> BrainResponse:
-        # Only initialise a real chat session when one hasn't been injected
-        # (e.g. by tests via patch.object or direct assignment).
-        if self._chat is None:
-            self._ensure_chat(system_prompt, tool_declarations)
+        from google.genai import types
 
-        # Replay conversation history (all messages except the last)
-        for msg in messages[:-1]:
-            if msg.role == "user":
-                self._chat.history.append({"role": "user", "parts": [msg.content]})
-            elif msg.role == "assistant":
-                self._chat.history.append({"role": "model", "parts": [msg.content]})
-
-        # Send the latest user message
-        last_message = messages[-1].content if messages else ""
-        response = self._chat.send_message(last_message)
-        return self._parse_response(response)
+        self._contents = [
+            types.Content(
+                role="user" if m.role == "user" else "model",
+                parts=[types.Part.from_text(text=m.content)],
+            )
+            for m in messages
+            if m.role in ("user", "assistant") and m.content
+        ]
+        tools = None
+        if tool_declarations:
+            tools = [
+                types.Tool(
+                    function_declarations=[
+                        types.FunctionDeclaration(
+                            name=d["name"],
+                            description=d.get("description", ""),
+                            parameters_json_schema=d.get("parameters"),
+                        )
+                        for d in tool_declarations
+                    ]
+                )
+            ]
+        self._config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            tools=tools,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+        return self._generate()
 
     def send_tool_results(self, results: list[dict]) -> BrainResponse:
-        """Send tool execution results back to Gemini and get the final response."""
-        from google.protobuf.struct_pb2 import Struct
+        from google.genai import types
 
-        parts = []
-        for result in results:
-            s = Struct()
-            s.update({"result": result["output"]})
-            parts.append(
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=result["name"], response=s
-                    )
-                )
+        parts = [
+            types.Part.from_function_response(
+                name=r["name"], response={"result": str(r["output"])}
             )
-        response = self._chat.send_message(parts)
-        return self._parse_response(response)
+            for r in results
+        ]
+        self._contents.append(types.Content(role="user", parts=parts))
+        return self._generate()
 
-    def _parse_response(self, response) -> BrainResponse:
-        tool_calls = []
-        text_parts = []
+    def _generate(self) -> BrainResponse:
+        response = self._client.models.generate_content(
+            model=self._model, contents=self._contents, config=self._config
+        )
+        candidates = getattr(response, "candidates", None) or []
+        content = candidates[0].content if candidates else None
+        if content is not None:
+            # Keep the model's turn verbatim so follow-up tool results line up.
+            self._contents.append(content)
+        return self._parse_parts(getattr(content, "parts", None) or [])
 
-        for part in response.parts:
-            if part.function_call and part.function_call.name:
-                tool_calls.append(
-                    ToolCall(
-                        name=part.function_call.name,
-                        args=dict(part.function_call.args)
-                        if part.function_call.args
-                        else {},
-                    )
-                )
-            elif part.text:
+    @staticmethod
+    def _parse_parts(parts) -> BrainResponse:
+        tool_calls: list[ToolCall] = []
+        text_parts: list[str] = []
+        for part in parts:
+            fc = getattr(part, "function_call", None)
+            if fc is not None and getattr(fc, "name", None):
+                tool_calls.append(ToolCall(name=fc.name, args=dict(fc.args or {})))
+            elif getattr(part, "text", None) and not getattr(part, "thought", False):
                 text_parts.append(part.text)
-
         if tool_calls:
             return BrainResponse(text=None, tool_calls=tool_calls)
-        return BrainResponse(text="\n".join(text_parts) if text_parts else "")
+        return BrainResponse(text="\n".join(text_parts))

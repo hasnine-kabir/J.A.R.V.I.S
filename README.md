@@ -1,3 +1,83 @@
+<h1 align="center">J.A.R.V.I.S. v2.0</h1>
+
+An AI assistant for your PC, powered by Google Gemini. You talk to it in plain English (typed or spoken), and it decides which of its tools to use: open apps, run commands, search the web, check the weather, remember things about you, read and write code, play music, send email.
+
+## Quick start (Windows)
+
+1. Install Python 3.11 or newer.
+2. Double-click **`install.bat`** (or run `pip install -r requirements-v2.txt`).
+3. Double-click **`jarvis.bat`** (or run `python -m jarvis`).
+4. On first launch, paste your free Gemini API key from https://aistudio.google.com/apikey. It is saved to `.env`.
+
+```
+python -m jarvis            # chat in the terminal
+python -m jarvis --voice    # Jarvis speaks its replies
+python -m jarvis --listen   # press Enter on an empty line, then talk
+python -m jarvis --ask "what's the weather in Dhaka?"   # one-shot answer
+```
+
+## Things to try
+
+| You say | Jarvis uses |
+|---|---|
+| what's the weather in London? | system_info → weather |
+| how's my PC doing? / how much disk space is left? | system_info |
+| open notepad / open my Downloads folder | pc_control → open_application |
+| list the files in E:/GITHUB | pc_control → list_directory |
+| run `ipconfig` and tell me my IP | pc_control → run_command (asks you first) |
+| search the web for the latest Python release and summarize it | web_search → search + read_page |
+| who was Ada Lovelace? | wikipedia_search |
+| show me the structure of this project, then explain jarvis/core/orchestrator.py | code_helper |
+| remember my exam is on Friday / what do you know about me? | notes (stored in `memory.db`) |
+| take a screenshot | screenshot |
+| play some music / search YouTube for lofi beats | media |
+| email bob@example.com that I'll be late | email_sender (asks you first) |
+
+In-chat commands: `/help`, `/voice on|off`, `/listen`, `/notes`, `/facts`, `/clear`, `exit`.
+
+**Safety.** Before running a shell command, writing a file, or sending an email, Jarvis shows you exactly what it wants to do and waits for **y**. Everything else (reading, searching, opening apps) runs right away.
+
+## Configuration
+
+`config.yaml` holds your name, Jarvis's personality, the Gemini model (`llm.model`, default `gemini-2.5-flash`) and voice settings (`voice.enabled`, `voice.name` such as "Zira" or "David", `voice.language` such as `en-IN`).
+
+`.env` holds secrets (git-ignored; see `.env.example`):
+
+```
+GEMINI_API_KEY=...
+SMTP_EMAIL=you@gmail.com        # optional, for email
+SMTP_PASSWORD=app-password      # a Gmail App Password, not your normal password
+```
+
+Jarvis remembers facts and notes across sessions in `memory.db`, and writes logs to `jarvis.log`.
+
+## Architecture
+
+```
+jarvis/
+├── __main__.py           entry point, first-run setup, CLI flags
+├── config.py             config.yaml + .env
+├── core/
+│   ├── brain.py          Brain protocol + GeminiBrain (google-genai, function calling)
+│   ├── orchestrator.py   input → brain → tools (with confirmation) → reply
+│   ├── memory.py         short-term conversation + long-term SQLite (facts, notes, session summaries)
+│   └── skill_registry.py auto-discovers skills in jarvis/skills/
+├── skills/               one file per skill; subclass BaseSkill, list Tools, implement execute()
+├── voice/                speaker (Windows speech / pyttsx3), listener (sounddevice + speech recognition)
+├── ui/terminal.py        rich + prompt_toolkit chat UI
+└── utils/
+```
+
+**Add a skill:** drop a new file in `jarvis/skills/` with a `BaseSkill` subclass. It is picked up automatically on the next start. Set `confirm=True` on any `Tool` that changes things.
+
+**Tests:** `python -m pytest`
+
+---
+
+## Legacy v1
+
+The original keyword-matching version of this project (`jarvis.py`, `helpers.py`, …) is still in the repo root, unchanged. The v1 README follows.
+
 <h1 align="center">J.A.R.V.I.S </h1> 
 
 <div align="center">

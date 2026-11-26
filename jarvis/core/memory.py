@@ -71,6 +71,11 @@ class LongTermMemory:
         rows = self._conn.execute("SELECT id, content, created_at FROM notes ORDER BY created_at DESC").fetchall()
         return [{"id": r["id"], "content": r["content"], "created_at": r["created_at"]} for r in rows]
 
+    def delete_note(self, note_id: int) -> bool:
+        cur = self._conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def save_session_summary(self, summary: str) -> None:
         now = datetime.now().isoformat()
         self._conn.execute("INSERT INTO history (summary, created_at) VALUES (?, ?)", (summary, now))
