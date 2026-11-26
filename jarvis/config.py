@@ -31,6 +31,16 @@ class Config:
         return _env("GEMINI_API_KEY")
 
     @property
+    def gemini_api_keys(self) -> list[str]:
+        """All keys from GEMINI_API_KEYS (comma/space separated) plus GEMINI_API_KEY."""
+        raw = _env("GEMINI_API_KEYS").replace(";", ",").replace(" ", ",")
+        keys = [k.strip() for k in raw.split(",") if k.strip() and not k.lower().startswith("your_")]
+        single = self.gemini_api_key
+        if single:
+            keys.append(single)
+        return list(dict.fromkeys(keys))
+
+    @property
     def smtp_email(self) -> str:
         return _env("SMTP_EMAIL")
 

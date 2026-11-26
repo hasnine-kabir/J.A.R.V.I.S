@@ -38,6 +38,8 @@ HELP = """[bold]Just talk to Jarvis in plain English.[/] Examples:
   /listen         talk instead of typing (or press Enter on an empty line in listen mode)
   /notes          show saved notes        /facts   show what Jarvis knows about you
   /clear          forget the current conversation (long-term memory is kept)
+  /keys           show your Gemini API keys and which one is in use
+  /addkey         add more Gemini API keys (used when one runs out)
   exit            quit"""
 
 
@@ -151,6 +153,20 @@ class TerminalUI:
         elif name in ("/notes", "/facts"):
             tool = "notes__get_notes" if name == "/notes" else "notes__get_facts"
             self._console.print(self._orchestrator._skill_registry.execute(tool, {}))
+        elif name == "/keys":
+            brain = self._orchestrator._brain
+            pool = getattr(brain, "keys", None)
+            for line in (pool.status() if pool else ["(key info unavailable)"]):
+                self._console.print(f"  {line}")
+        elif name == "/addkey":
+            from jarvis.__main__ import ask_for_keys, save_keys
+
+            new = ask_for_keys("Add Gemini API keys.")
+            pool = getattr(self._orchestrator._brain, "keys", None)
+            if new and pool is not None:
+                total = save_keys(self._config, new)
+                pool.add(new)
+                self._console.print(f"[info]Saved. Jarvis now has {total} key(s).[/]")
         elif name == "/clear":
             self._orchestrator._short_term_memory.clear()
             self._console.print("[info]Conversation cleared.[/]")

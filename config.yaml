@@ -10,8 +10,10 @@ jarvis:
 
 llm:
   provider: gemini
-  # Any Gemini model your key can use, e.g. gemini-2.5-flash, gemini-2.5-pro
-  model: gemini-2.5-flash
+  # Any Gemini model your key can use, e.g. gemini-3.5-flash, gemini-3.8-flash
+  model: gemini-3.5-flash
+  # Tried in order when the main model is overloaded (HTTP 5xx)
+  fallback_models: [gemini-3.8-flash, gemini-3.1-flash-lite]
   max_history: 50
 
 voice:

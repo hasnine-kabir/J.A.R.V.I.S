@@ -9,24 +9,56 @@ from jarvis.utils.logger import setup_logger
 logger = setup_logger()
 
 
-def _first_run_setup(config: Config) -> Config:
-    """Ask for a Gemini API key on first launch and store it in .env (never printed)."""
-    from dotenv import set_key
-    from prompt_toolkit import prompt
+def save_keys(config: Config, new_keys: list[str]) -> int:
+    """Merge new keys into GEMINI_API_KEYS in .env. Returns the total number of keys."""
+    import os
 
-    print("\nWelcome to J.A.R.V.I.S. v2.0 — first-time setup.")
-    print("Jarvis needs a Google Gemini API key. Get one free at https://aistudio.google.com/apikey")
-    try:
-        key = prompt("Paste your Gemini API key (input hidden): ", is_password=True).strip()
-    except (KeyboardInterrupt, EOFError):
-        key = ""
-    if not key:
-        print("No key entered. You can also put GEMINI_API_KEY=... in", config.env_path)
-        sys.exit(1)
+    from dotenv import set_key, unset_key
+
+    keys = list(dict.fromkeys(config.gemini_api_keys + [k.strip() for k in new_keys if k.strip()]))
     env_file = Path(config.env_path)
     env_file.touch(exist_ok=True)
-    set_key(str(env_file), "GEMINI_API_KEY", key, quote_mode="never")
-    print(f"Saved to {env_file}.\n")
+    set_key(str(env_file), "GEMINI_API_KEYS", ",".join(keys), quote_mode="never")
+    if config.gemini_api_key:
+        unset_key(str(env_file), "GEMINI_API_KEY")
+    # Keep this process in sync (load_dotenv does not override existing variables).
+    os.environ["GEMINI_API_KEYS"] = ",".join(keys)
+    os.environ.pop("GEMINI_API_KEY", None)
+    return len(keys)
+
+
+def ask_for_keys(intro: str) -> list[str]:
+    """Prompt for one or more keys (hidden input). Empty line finishes."""
+    from prompt_toolkit import prompt
+
+    print(intro)
+    print("Paste one key per line (input is hidden). You can also paste several separated by commas.")
+    print("Press Enter on an empty line when you're done.")
+    keys: list[str] = []
+    while True:
+        try:
+            line = prompt(f"Gemini API key #{len(keys) + 1}: ", is_password=True).strip()
+        except (KeyboardInterrupt, EOFError):
+            break
+        if not line:
+            break
+        added = [k.strip() for k in line.replace(";", ",").replace(" ", ",").split(",") if k.strip()]
+        keys.extend(added)
+        print(f"  ✓ got {len(added)} key(s)")
+    return keys
+
+
+def _first_run_setup(config: Config) -> Config:
+    keys = ask_for_keys(
+        "\nWelcome to J.A.R.V.I.S. v2.0 — first-time setup.\n"
+        "Jarvis needs a Google Gemini API key. Get one free at https://aistudio.google.com/apikey\n"
+        "Tip: add several keys — when one runs out of quota Jarvis switches to the next."
+    )
+    if not keys:
+        print("No key entered. You can also put GEMINI_API_KEYS=key1,key2 in", config.env_path)
+        sys.exit(1)
+    total = save_keys(config, keys)
+    print(f"Saved {total} key(s) to {config.env_path}.\n")
     return Config()
 
 
@@ -37,8 +69,9 @@ def build_orchestrator(config: Config):
     from jarvis.core.skill_registry import SkillRegistry
 
     brain = GeminiBrain(
-        api_key=config.gemini_api_key,
-        model=config.get("llm.model", "gemini-2.5-flash"),
+        api_key=config.gemini_api_keys,
+        model=config.get("llm.model", "gemini-3.5-flash"),
+        fallback_models=config.get("llm.fallback_models", []),
     )
     registry = SkillRegistry()
     registry.discover()
@@ -56,10 +89,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--voice", action="store_true", help="speak replies aloud")
     parser.add_argument("--listen", action="store_true", help="start in microphone (listen) mode")
     parser.add_argument("--ask", metavar="TEXT", help="ask one question, print the answer, exit")
+    parser.add_argument("--add-key", action="store_true", help="add more Gemini API keys, then exit")
     args = parser.parse_args(argv)
 
     config = Config()
-    if not config.gemini_api_key:
+    if args.add_key:
+        keys = ask_for_keys(f"You have {len(config.gemini_api_keys)} Gemini key(s) saved.")
+        if keys:
+            print(f"Saved. Jarvis now has {save_keys(config, keys)} key(s).")
+        return
+    if not config.gemini_api_keys:
         config = _first_run_setup(config)
 
     orchestrator = build_orchestrator(config)

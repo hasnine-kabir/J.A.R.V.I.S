@@ -39,7 +39,7 @@ In-chat commands: `/help`, `/voice on|off`, `/listen`, `/notes`, `/facts`, `/cle
 
 ## Configuration
 
-`config.yaml` holds your name, Jarvis's personality, the Gemini model (`llm.model`, default `gemini-2.5-flash`) and voice settings (`voice.enabled`, `voice.name` such as "Zira" or "David", `voice.language` such as `en-IN`).
+`config.yaml` holds your name, Jarvis's personality, the Gemini model (`llm.model`, default `gemini-3.5-flash`, with automatic fallbacks) and voice settings (`voice.enabled`, `voice.name` such as "Zira" or "David", `voice.language` such as `en-IN`).
 
 `.env` holds secrets (git-ignored; see `.env.example`):
 
