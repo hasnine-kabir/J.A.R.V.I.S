@@ -1,4 +1,5 @@
 import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from jarvis.config import Config
 from jarvis.core.brain import Brain, Message
@@ -16,8 +17,12 @@ Rules:
   they help; never claim you did something without calling the tool.
 - When the user tells you a lasting personal fact or preference, save it with notes__save_fact.
   When they ask you to remember something, use notes__save_note.
+- To open an app, file, folder or website use pc_control__open_application (pass a URL as
+  `target`, e.g. app_name='chrome', target='https://youtube.com'). Use run_command only for
+  things that really need a shell.
 - Keep spoken-style answers short (1-3 sentences) unless the user asks for detail.
-- Plain text only: no markdown tables, no code fences unless showing code.
+- Light markdown is fine (short bullet lists, **bold**, `inline code`). Always put code in a
+  fenced block with its language, e.g. ```python. No tables.
 """
 
 
@@ -76,8 +81,7 @@ class Orchestrator:
             self._on_action(name, status)
 
     def _run_tool(self, name: str, args: dict) -> str:
-        tool = self._skill_registry.get_tool(name)
-        if tool is not None and tool.confirm:
+        if self._needs_ok(name):
             approved = bool(self._confirm and self._confirm(name, args))
             if not approved:
                 self._notify(name, "declined")
@@ -88,21 +92,33 @@ class Orchestrator:
         self._notify(name, "done")
         return output
 
-    def process(self, user_input: str) -> str:
+    def _needs_ok(self, name: str) -> bool:
+        tool = self._skill_registry.get_tool(name)
+        return bool(tool is not None and tool.confirm and self._config.get("safety.confirm_actions", True))
+
+    def _run_tools(self, tool_calls) -> list[dict]:
+        """Run one round of tool calls - in parallel unless one needs the user's OK."""
+        if len(tool_calls) > 1 and not any(self._needs_ok(tc.name) for tc in tool_calls):
+            with ThreadPoolExecutor(max_workers=min(8, len(tool_calls))) as pool:
+                outputs = list(pool.map(lambda tc: self._run_tool(tc.name, tc.args), tool_calls))
+        else:
+            outputs = [self._run_tool(tc.name, tc.args) for tc in tool_calls]
+        return [{"name": tc.name, "output": out} for tc, out in zip(tool_calls, outputs)]
+
+    def process(self, user_input: str, on_text=None) -> str:
+        """Answer one user message. `on_text(fragment)` streams the reply as it is generated."""
         self._short_term_memory.add(Message(role="user", content=user_input))
 
         messages = self._short_term_memory.get_messages()
         tool_declarations = self._skill_registry.get_tool_declarations()
-        response = self._brain.think(messages, tool_declarations, self.get_system_prompt())
+        response = self._brain.think(messages, tool_declarations, self.get_system_prompt(),
+                                     on_text=on_text)
 
         rounds = 0
         while response.tool_calls and rounds < MAX_TOOL_ROUNDS:
             rounds += 1
-            results = [
-                {"name": tc.name, "output": self._run_tool(tc.name, tc.args)}
-                for tc in response.tool_calls
-            ]
-            response = self._brain.send_tool_results(results)
+            response = self._brain.send_tool_results(self._run_tools(response.tool_calls),
+                                                     on_text=on_text)
 
         final_text = (response.text or "").strip()
         if not final_text:

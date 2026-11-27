@@ -1,4 +1,4 @@
-"""Entry point: python -m jarvis [--voice] [--listen]"""
+"""Entry point: python -m jarvis [--web] [--voice] [--listen] [--handsfree]"""
 import argparse
 import sys
 from pathlib import Path
@@ -62,6 +62,30 @@ def _first_run_setup(config: Config) -> Config:
     return Config()
 
 
+def _mic_test(config: Config) -> None:
+    from jarvis.voice.listener import Listener
+
+    listener = Listener(language=config.get("voice.language", "en-US"),
+                        min_threshold=config.get("voice.mic_threshold", 200))
+    print("Mic test: stay quiet for a moment, then say \"Jarvis, what time is it?\" at normal volume.")
+    input("Press Enter, then speak... ")
+    background, loudest = listener.measure(4.0)
+    print(f"Background noise level: {background:.0f}   Your voice peaked at: {loudest:.0f}")
+    print(f"Speech is detected above:  {max(listener._min_threshold, background * 3):.0f}"
+          "  (voice.mic_threshold in config.yaml)")
+    if loudest < 100:
+        print("-> The mic barely hears anything. Check it's not muted and is the default recording "
+              "device (Windows Settings > System > Sound > Input), and raise its volume.")
+    elif loudest < max(listener._min_threshold, background * 3) * 1.5:
+        suggested = int(max(50, loudest / 2.5))
+        print(f"-> Your voice is close to the detection level. Set voice.mic_threshold: {suggested} "
+              "in config.yaml, or raise the mic volume.")
+    else:
+        print("-> Looks good. Now testing recognition: say \"Jarvis, what time is it?\"")
+        heard = listener.listen(wait_seconds=8)
+        print(f"Heard: {heard!r}" if heard else "Didn't catch any words - try speaking a bit closer.")
+
+
 def build_orchestrator(config: Config):
     from jarvis.core.brain import GeminiBrain
     from jarvis.core.memory import LongTermMemory, ShortTermMemory
@@ -70,8 +94,9 @@ def build_orchestrator(config: Config):
 
     brain = GeminiBrain(
         api_key=config.gemini_api_keys,
-        model=config.get("llm.model", "gemini-3.5-flash"),
+        model=config.get("llm.model", "gemini-3.5-flash-lite"),
         fallback_models=config.get("llm.fallback_models", []),
+        thinking_level=config.get("llm.thinking_level", "minimal"),
     )
     registry = SkillRegistry()
     registry.discover()
@@ -89,10 +114,19 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--voice", action="store_true", help="speak replies aloud")
     parser.add_argument("--listen", action="store_true", help="start in microphone (listen) mode")
     parser.add_argument("--ask", metavar="TEXT", help="ask one question, print the answer, exit")
+    parser.add_argument("--handsfree", action="store_true",
+                        help="always listen: say 'Jarvis ...' and it answers out loud")
+    parser.add_argument("--web", action="store_true", help="open the Jarvis web UI in your browser")
+    parser.add_argument("--port", type=int, help="web UI port (default from config.yaml, 8765)")
+    parser.add_argument("--no-browser", action="store_true", help="with --web: don't open a browser tab")
+    parser.add_argument("--mic-test", action="store_true", help="check that the microphone hears you")
     parser.add_argument("--add-key", action="store_true", help="add more Gemini API keys, then exit")
     args = parser.parse_args(argv)
 
     config = Config()
+    if args.mic_test:
+        _mic_test(config)
+        return
     if args.add_key:
         keys = ask_for_keys(f"You have {len(config.gemini_api_keys)} Gemini key(s) saved.")
         if keys:
@@ -127,9 +161,34 @@ def main(argv: list[str] | None = None) -> None:
     try:
         from jarvis.voice.listener import Listener
 
-        listener = Listener(language=config.get("voice.language", "en-US"))
+        listener = Listener(language=config.get("voice.language", "en-US"),
+                            min_threshold=config.get("voice.mic_threshold", 200))
     except Exception as e:
         logger.warning(f"Microphone input unavailable: {e}")
+
+    if args.web:
+        from jarvis.web.server import run
+
+        if args.port:
+            config._data.setdefault("web", {})["port"] = args.port
+        if args.no_browser:
+            config._data.setdefault("web", {})["open_browser"] = False
+        run(orchestrator, config, speaker, listener)
+        return
+
+    if args.handsfree:
+        from jarvis.ui.handsfree import HandsFreeSession
+
+        if not (speaker and listener):
+            print("Hands-free mode needs a working microphone and speakers. See jarvis.log for details.")
+            orchestrator.shutdown()
+            sys.exit(1)
+        try:
+            HandsFreeSession(orchestrator, config, speaker, listener).run()
+        finally:
+            orchestrator.shutdown()
+            speaker.close()
+        return
 
     from jarvis.ui.terminal import TerminalUI
 

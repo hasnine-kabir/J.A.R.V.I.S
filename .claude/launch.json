@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "jarvis-web",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "jarvis", "--web", "--no-browser"],
+      "port": 8765
+    }
+  ]
+}

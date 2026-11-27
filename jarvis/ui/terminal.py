@@ -4,6 +4,7 @@ import json
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -35,7 +36,8 @@ HELP = """[bold]Just talk to Jarvis in plain English.[/] Examples:
 [bold]Commands[/]
   /help           this help
   /voice on|off   speak replies aloud
-  /listen         talk instead of typing (or press Enter on an empty line in listen mode)
+  /listen         push-to-talk: press Enter on an empty line, then speak
+  /handsfree      always listening: say "Jarvis, ..." and it answers out loud
   /notes          show saved notes        /facts   show what Jarvis knows about you
   /clear          forget the current conversation (long-term memory is kept)
   /keys           show your Gemini API keys and which one is in use
@@ -54,6 +56,7 @@ class TerminalUI:
         self._voice_on = speaker is not None
         self._listen_mode = False
         self._status = None
+        self._live = None
         self._orchestrator.set_action_callback(self._on_action)
         self._orchestrator.set_confirm_callback(self._confirm)
 
@@ -66,6 +69,9 @@ class TerminalUI:
             self._console.print(f"  ✗ {clean_name} (declined)", style="error")
 
     def _confirm(self, action_name: str, args: dict) -> bool:
+        if self._live:
+            self._live.stop()
+            self._live = None
         if self._status:
             self._status.stop()
         try:
@@ -150,6 +156,18 @@ class TerminalUI:
                 self._console.print(
                     f"[info]Listen mode {'on — press Enter on an empty line to talk' if self._listen_mode else 'off'}.[/]"
                 )
+        elif name == "/handsfree":
+            if not (self._listener and self._speaker):
+                self._console.print("[error]Hands-free mode needs a working microphone and speakers.[/]")
+            else:
+                from jarvis.ui.handsfree import HandsFreeSession
+
+                HandsFreeSession(self._orchestrator, self._config, self._speaker,
+                                 self._listener, self._console).run()
+                # back to text mode: restore the keyboard callbacks
+                self._orchestrator.set_action_callback(self._on_action)
+                self._orchestrator.set_confirm_callback(self._confirm)
+                self._console.print("[info]Back to text mode.[/]")
         elif name in ("/notes", "/facts"):
             tool = "notes__get_notes" if name == "/notes" else "notes__get_facts"
             self._console.print(self._orchestrator._skill_registry.execute(tool, {}))
@@ -174,6 +192,44 @@ class TerminalUI:
             self._console.print(f"[error]Unknown command {name}. Try /help.[/]")
         return True
 
+    def _stop_live(self) -> None:
+        if self._live:
+            self._live.stop()
+            self._live = None
+        if self._status:
+            self._status.stop()
+            self._status = None
+
+    def _ask(self, user_input: str) -> None:
+        """Send one message; the reply is rendered live as it streams in."""
+        streamed: list[str] = []
+        self._status = self._console.status("[cyan]Thinking…[/]")
+        self._status.start()
+
+        def on_text(fragment: str) -> None:
+            streamed.append(fragment)
+            if self._live is None:
+                if self._status:
+                    self._status.stop()
+                    self._status = None
+                self._console.print()
+                self._console.print("[jarvis]JARVIS >[/]")
+                self._live = Live(console=self._console, refresh_per_second=15,
+                                  vertical_overflow="visible")
+                self._live.start()
+            self._live.update(Markdown("".join(streamed)))
+
+        response = self._orchestrator.process(user_input, on_text=on_text)
+        if self._live is None:  # nothing was streamed (e.g. a non-streaming fallback)
+            self._stop_live()
+            self.display_response(response)
+            return
+        self._live.update(Markdown(response))
+        self._stop_live()
+        self._console.print()
+        if self._voice_on and self._speaker:
+            self._speaker.say(response)
+
     def run(self) -> None:
         self._greet()
         self.display_response("How can I help you today?", speak=False)
@@ -191,18 +247,14 @@ class TerminalUI:
                 continue
 
             try:
-                with self._console.status("[cyan]Thinking…[/]") as status:
-                    self._status = status
-                    response = self._orchestrator.process(user_input)
-                self._status = None
-                self.display_response(response)
+                self._ask(user_input)
             except KeyboardInterrupt:
-                self._status = None
                 self._console.print("[info]Interrupted.[/]")
             except Exception as e:
-                self._status = None
                 logger.exception("process() failed")
                 self._console.print(f"[error]{friendly_error(e, self._config.get('llm.model', ''))}[/]")
+            finally:
+                self._stop_live()
 
         user_name = self._config.get("user.name", "Sir")
         with self._console.status("[cyan]Saving memory…[/]"):

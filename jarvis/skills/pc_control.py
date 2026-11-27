@@ -22,9 +22,13 @@ class PCControlSkill(BaseSkill):
         ),
         Tool(
             name="open_application",
-            description="Open an application, file, folder or URL by name or path "
-                        "(e.g. 'notepad', 'calc', 'chrome', 'code', 'C:/Users')",
-            parameters={"app_name": {"type": "string", "description": "App name, file path, folder or URL"}},
+            description="Open an application, file, folder or website. Examples: app_name='notepad'; "
+                        "app_name='https://youtube.com' (default browser); app_name='chrome', "
+                        "target='https://youtube.com'; app_name='C:/Users'",
+            parameters={
+                "app_name": {"type": "string", "description": "App name, file path, folder or URL"},
+                "target": {"type": "string", "description": "Optional file or URL to open with that app"},
+            },
             required=["app_name"],
         ),
         Tool(
@@ -44,7 +48,7 @@ class PCControlSkill(BaseSkill):
         if action == "run_command":
             return self._run_command(args["command"])
         if action == "open_application":
-            return self._open_app(args["app_name"])
+            return self._open_app(args["app_name"], args.get("target", ""))
         if action == "list_directory":
             return self._list_dir(args.get("path") or ".")
         if action == "read_file":
@@ -67,18 +71,20 @@ class PCControlSkill(BaseSkill):
         status = f"exit code {result.returncode}"
         return f"{output}\n({status})" if output else f"Command finished with {status} (no output)."
 
-    def _open_app(self, app_name: str) -> str:
+    def _open_app(self, app_name: str, target: str = "") -> str:
+        app_name, target = app_name.replace('"', ""), target.replace('"', "")
         try:
             if sys.platform == "win32":
                 # `start` resolves registered apps (chrome, code, spotify...), files, folders, URLs.
-                subprocess.Popen(f'start "" "{app_name}"', shell=True)
+                extra = f' "{target}"' if target else ""
+                subprocess.Popen(f'start "" "{app_name}"{extra}', shell=True)
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-a", app_name])
+                subprocess.Popen(["open", "-a", app_name] + ([target] if target else []))
             else:
-                subprocess.Popen(["xdg-open", app_name])
+                subprocess.Popen(["xdg-open", target or app_name])
         except Exception as e:
             return f"Failed to open {app_name}: {e}"
-        return f"Opened {app_name}."
+        return f"Opened {app_name}{' → ' + target if target else ''}."
 
     def _list_dir(self, path: str) -> str:
         try:

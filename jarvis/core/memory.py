@@ -1,5 +1,8 @@
+import functools
 import sqlite3
+import threading
 from datetime import datetime
+
 from jarvis.core.brain import Message
 from jarvis.utils.logger import setup_logger
 
@@ -25,7 +28,9 @@ class ShortTermMemory:
 
 class LongTermMemory:
     def __init__(self, db_path: str = "memory.db"):
-        self._conn = sqlite3.connect(db_path)
+        # Shared by the UI thread and worker threads; every method holds self._lock.
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -76,6 +81,11 @@ class LongTermMemory:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def delete_fact(self, key: str) -> bool:
+        cur = self._conn.execute("DELETE FROM facts WHERE key = ?", (key,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def save_session_summary(self, summary: str) -> None:
         now = datetime.now().isoformat()
         self._conn.execute("INSERT INTO history (summary, created_at) VALUES (?, ?)", (summary, now))
@@ -97,3 +107,16 @@ class LongTermMemory:
 
     def close(self) -> None:
         self._conn.close()
+
+
+def _locked(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
+for _name, _fn in list(vars(LongTermMemory).items()):
+    if callable(_fn) and not _name.startswith("__"):
+        setattr(LongTermMemory, _name, _locked(_fn))

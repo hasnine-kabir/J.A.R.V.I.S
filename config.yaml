@@ -10,14 +10,31 @@ jarvis:
 
 llm:
   provider: gemini
-  # Any Gemini model your key can use, e.g. gemini-3.5-flash, gemini-3.8-flash
-  model: gemini-3.5-flash
+  # Any Gemini model your key can use. Lite models answer in ~1 s; flash models are smarter
+  # but slower and often overloaded. You can also switch models live in the web UI.
+  model: gemini-3.5-flash-lite
   # Tried in order when the main model is overloaded (HTTP 5xx)
-  fallback_models: [gemini-3.8-flash, gemini-3.1-flash-lite]
+  fallback_models: [gemini-3.1-flash-lite, gemini-3.5-flash]
+  # How hard the model thinks before answering: minimal | low | medium | high
+  # (lower = faster replies; models that don't support it ignore it)
+  thinking_level: minimal
   max_history: 50
+
+safety:
+  # true  = Jarvis asks before running shell commands, writing files or sending email
+  # false = Jarvis does everything without asking (full access)
+  confirm_actions: false
 
 voice:
   enabled: false        # speak replies by default (or run with --voice, or type /voice on)
   name: ""              # part of a Windows voice name, e.g. "David" or "Zira"
   rate: 185
   language: en-US       # speech recognition language, e.g. en-IN, bn-BD
+  wake_words: [jarvis]  # hands-free mode reacts to sentences containing one of these
+  follow_up_seconds: 10 # after a reply, keep listening this long without needing the wake word
+  mic_threshold: 200    # lower = more sensitive microphone. Run: python -m jarvis --mic-test
+
+web:
+  host: 127.0.0.1       # use 0.0.0.0 to open the UI from your phone on the same Wi-Fi
+  port: 8765
+  open_browser: true

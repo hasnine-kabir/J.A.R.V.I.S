@@ -4,5 +4,5 @@ cd /d "%~dp0"
 python -m pip install -r requirements-v2.txt
 if not exist .env copy .env.example .env
 echo.
-echo Done. Start Jarvis with jarvis.bat
+echo Done. Start Jarvis with jarvis-ui.bat (web UI) or jarvis.bat (terminal)
 pause

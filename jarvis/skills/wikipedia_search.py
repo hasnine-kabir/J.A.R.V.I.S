@@ -1,6 +1,8 @@
-import wikipedia
 
 from jarvis.skills.base import BaseSkill, Tool
+from jarvis.utils.lazy import LazyModule
+
+wikipedia = LazyModule("wikipedia")
 
 
 class WikipediaSearchSkill(BaseSkill):

@@ -147,3 +147,4 @@ memory.db
 jarvis.log
 .jarvis_history
 .superpowers/
+.claude/settings.local.json

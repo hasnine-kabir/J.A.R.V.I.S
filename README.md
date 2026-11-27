@@ -1,4 +1,4 @@
-<h1 align="center">J.A.R.V.I.S. v2.0</h1>
+<h1 align="center">J.A.R.V.I.S. v2.1</h1>
 
 An AI assistant for your PC, powered by Google Gemini. You talk to it in plain English (typed or spoken), and it decides which of its tools to use: open apps, run commands, search the web, check the weather, remember things about you, read and write code, play music, send email.
 
@@ -6,13 +6,18 @@ An AI assistant for your PC, powered by Google Gemini. You talk to it in plain E
 
 1. Install Python 3.11 or newer.
 2. Double-click **`install.bat`** (or run `pip install -r requirements-v2.txt`).
-3. Double-click **`jarvis.bat`** (or run `python -m jarvis`).
-4. On first launch, paste your free Gemini API key from https://aistudio.google.com/apikey. It is saved to `.env`.
+3. Double-click **`jarvis-ui.bat`** for the web UI (or run `python -m jarvis --web`).
+4. Prefer the terminal? Double-click **`jarvis.bat`**. For hands-free voice in the terminal, **`jarvis-handsfree.bat`**.
+5. On first launch, paste your free Gemini API key from https://aistudio.google.com/apikey. It is saved to `.env`.
 
 ```
+python -m jarvis --web      # web UI at http://127.0.0.1:8765 (opens your browser)
 python -m jarvis            # chat in the terminal
 python -m jarvis --voice    # Jarvis speaks its replies
-python -m jarvis --listen   # press Enter on an empty line, then talk
+python -m jarvis --listen   # push-to-talk: press Enter on an empty line, then talk
+python -m jarvis --handsfree   # always listening: say "Jarvis, ..." and it answers out loud
+python -m jarvis --mic-test    # check that the microphone hears you
+python -m jarvis --add-key     # add more Gemini API keys
 python -m jarvis --ask "what's the weather in Dhaka?"   # one-shot answer
 ```
 
@@ -33,13 +38,47 @@ python -m jarvis --ask "what's the weather in Dhaka?"   # one-shot answer
 | play some music / search YouTube for lofi beats | media |
 | email bob@example.com that I'll be late | email_sender (asks you first) |
 
-In-chat commands: `/help`, `/voice on|off`, `/listen`, `/notes`, `/facts`, `/clear`, `exit`.
+In-chat commands: `/help`, `/voice on|off`, `/listen`, `/handsfree`, `/notes`, `/facts`, `/keys`, `/addkey`, `/clear`, `exit`.
 
-**Safety.** Before running a shell command, writing a file, or sending an email, Jarvis shows you exactly what it wants to do and waits for **y**. Everything else (reading, searching, opening apps) runs right away.
+## Web UI
+
+`jarvis-ui.bat` or `python -m jarvis --web` starts a local server and opens the UI in your browser.
+
+- Replies stream in word by word. Tool use shows up as chips under the reply (amber while running, green when done).
+- **Left panel:** the status orb (blue = ready, amber = thinking, green = listening, pulsing = speaking), voice-reply and hands-free switches, a live model picker, CPU/RAM/battery and your API keys.
+- **Right panel:** what Jarvis remembers about you and your notes (hover to delete), the loaded skills, and recent actions.
+- **Mic button:** push-to-talk. The answer is spoken back. **Hands-free switch:** always listening for "Jarvis, …".
+- Keys: `Enter` sends, `Shift+Enter` adds a new line, `/` focuses the box, `Esc` stops speech.
+- It works on phones and tablets too. Set `web.host: 0.0.0.0` in `config.yaml` to open it from another device on your Wi-Fi. There is no login, so only do that on a network you trust.
+- Voice uses this PC's microphone and speakers, not the browser's.
+
+## Speed
+
+- Replies stream as they're generated, in both the web UI and the terminal. In voice modes Jarvis starts speaking after the first sentence.
+- The default model is `gemini-3.5-flash-lite` with `thinking_level: minimal`. Most answers take 1 to 3 seconds. Pick a bigger model (e.g. `gemini-3.5-flash`) in the UI or `config.yaml` when you want deeper answers. Those are slower and often overloaded; Jarvis falls back automatically.
+- When the model asks for several tools at once, they run in parallel.
+- Heavy libraries load only when a skill first needs them, so startup is quick.
+
+## Hands-free voice mode
+
+Run `jarvis-handsfree.bat`, `python -m jarvis --handsfree`, or type `/handsfree` in the chat.
+
+- Say **"Jarvis, what's the weather?"** and it answers out loud.
+- Say just **"Jarvis"** and it replies "Yes?", then listens for your request.
+- After each reply you have about 10 seconds to ask a follow-up without saying "Jarvis".
+- Say **"never mind"** to cancel, or **"goodbye"** (or press Ctrl+C) to stop.
+- Speech that doesn't include "Jarvis" is ignored. Recognition uses Google's free speech service, so audio of what you say is sent to Google.
+- If Jarvis doesn't react to your voice, run `python -m jarvis --mic-test` and follow its advice (usually lowering `voice.mic_threshold`).
+
+## Multiple API keys
+
+Put several keys in `.env` as `GEMINI_API_KEYS=key1,key2,key3`, or add them with `/addkey`. When a key runs out of quota, Jarvis switches to the next one and retries automatically. `/keys` shows which key is in use.
+
+**Permissions.** `safety.confirm_actions` in `config.yaml` controls this. When `false` (full access), Jarvis runs shell commands, writes files and sends email without asking. When `true`, it shows you exactly what it wants to do first and waits for **y** (or a spoken "yes" in hands-free mode). Reading, searching and opening apps always run right away. Jarvis also reads web pages, which could contain text that tries to trick it, so turn confirmations on if that worries you.
 
 ## Configuration
 
-`config.yaml` holds your name, Jarvis's personality, the Gemini model (`llm.model`, default `gemini-3.5-flash`, with automatic fallbacks) and voice settings (`voice.enabled`, `voice.name` such as "Zira" or "David", `voice.language` such as `en-IN`).
+`config.yaml` holds your name, Jarvis's personality, the Gemini model (`llm.model`, default `gemini-3.5-flash-lite`, with automatic fallbacks, and `llm.thinking_level`), the web UI (`web.host`, `web.port`) and voice settings (`voice.enabled`, `voice.name` such as "Zira" or "David", `voice.language` such as `en-IN`).
 
 `.env` holds secrets (git-ignored; see `.env.example`):
 
@@ -58,13 +97,16 @@ jarvis/
 ├── __main__.py           entry point, first-run setup, CLI flags
 ├── config.py             config.yaml + .env
 ├── core/
-│   ├── brain.py          Brain protocol + GeminiBrain (google-genai, function calling)
+│   ├── brain.py          Brain protocol + GeminiBrain (google-genai, streaming, function calling)
 │   ├── orchestrator.py   input → brain → tools (with confirmation) → reply
 │   ├── memory.py         short-term conversation + long-term SQLite (facts, notes, session summaries)
 │   └── skill_registry.py auto-discovers skills in jarvis/skills/
 ├── skills/               one file per skill; subclass BaseSkill, list Tools, implement execute()
 ├── voice/                speaker (Windows speech / pyttsx3), listener (sounddevice + speech recognition)
-├── ui/terminal.py        rich + prompt_toolkit chat UI
+├── ui/terminal.py        rich + prompt_toolkit chat UI (streaming)
+├── ui/handsfree.py       wake-word voice loop for the terminal
+├── web/server.py         FastAPI + WebSocket server for the web UI
+├── web/static/           the web UI (plain HTML/CSS/JS, no build step)
 └── utils/
 ```
 

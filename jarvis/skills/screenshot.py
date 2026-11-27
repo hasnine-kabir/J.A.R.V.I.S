@@ -1,9 +1,11 @@
 import datetime
 from pathlib import Path
 
-import pyautogui
 
 from jarvis.skills.base import BaseSkill, Tool
+from jarvis.utils.lazy import LazyModule
+
+pyautogui = LazyModule("pyautogui")
 
 
 def _default_folder() -> Path:

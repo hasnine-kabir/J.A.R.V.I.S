@@ -1,9 +1,11 @@
 import datetime
 
 import psutil
-import requests
 
 from jarvis.skills.base import BaseSkill, Tool
+from jarvis.utils.lazy import LazyModule
+
+requests = LazyModule("requests")
 
 WEATHER_CODES = {
     0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
@@ -76,9 +78,11 @@ class SystemInfoSkill(BaseSkill):
                 raise ValueError(f"unknown city '{city}'")
             hit = r["results"][0]
             return hit["latitude"], hit["longitude"], f"{hit['name']}, {hit.get('country', '')}"
-        r = requests.get("https://ipinfo.io/json", timeout=10).json()
-        lat, lon = (float(x) for x in r["loc"].split(","))
-        return lat, lon, f"{r.get('city', '')}, {r.get('country', '')}"
+        if getattr(self, "_here", None) is None:  # the PC doesn't move often: look it up once
+            r = requests.get("https://ipinfo.io/json", timeout=10).json()
+            lat, lon = (float(x) for x in r["loc"].split(","))
+            self._here = (lat, lon, f"{r.get('city', '')}, {r.get('country', '')}")
+        return self._here
 
     def _weather(self, city: str) -> str:
         try:

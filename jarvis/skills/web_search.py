@@ -1,10 +1,12 @@
 import webbrowser
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
-import requests
-from bs4 import BeautifulSoup
 
 from jarvis.skills.base import BaseSkill, Tool
+from jarvis.utils.lazy import LazyModule
+
+requests = LazyModule("requests")
+bs4 = LazyModule("bs4")
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JarvisAssistant/2.0"}
 
@@ -67,7 +69,7 @@ class WebSearchSkill(BaseSkill):
             resp.raise_for_status()
         except Exception as e:
             return f"Search failed: {e}"
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = bs4.BeautifulSoup(resp.text, "html.parser")
         results = []
         for block in soup.select(".result"):
             link = block.select_one(".result__a")
@@ -89,7 +91,7 @@ class WebSearchSkill(BaseSkill):
             resp.raise_for_status()
         except Exception as e:
             return f"Could not fetch {url}: {e}"
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = bs4.BeautifulSoup(resp.text, "html.parser")
         for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript"]):
             tag.decompose()
         root = soup.find("article") or soup.find("main") or soup.body or soup
